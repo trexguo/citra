@@ -1,11 +1,19 @@
 package org.citra.citra_emu.ui.main;
 
+import android.app.ActivityOptions;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.hardware.display.DisplayManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.util.Log;
+import android.view.Display;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
+import android.view.View;
+import android.view.ViewTreeObserver;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
@@ -26,6 +34,7 @@ import com.google.android.material.appbar.AppBarLayout;
 import org.citra.citra_emu.NativeLibrary;
 import org.citra.citra_emu.R;
 import org.citra.citra_emu.activities.EmulationActivity;
+import org.citra.citra_emu.activities.EmulationActivity2;
 import org.citra.citra_emu.contracts.OpenFileResultContract;
 import org.citra.citra_emu.features.settings.ui.SettingsActivity;
 import org.citra.citra_emu.model.GameProvider;
@@ -40,6 +49,9 @@ import org.citra.citra_emu.utils.PermissionsHandler;
 import org.citra.citra_emu.utils.PicassoUtils;
 import org.citra.citra_emu.utils.StartupHandler;
 import org.citra.citra_emu.utils.ThemeUtil;
+
+import com.lge.display.DisplayManagerHelper;
+import com.lge.display.DisplayManagerHelper.SwivelStateCallback;
 
 /**
  * The main Activity of the Lollipop style UI. Manages several PlatformGamesFragments, which
@@ -56,6 +68,18 @@ public final class MainActivity extends AppCompatActivity implements MainView {
     private static BillingManager mBillingManager;
 
     private static MenuItem mPremiumButton;
+
+    public static final String ACTION_FINISH_MAIN2ACTIVITY = "org.citra.citra_emu.ui.main.emu_activity2.finish";
+    private DisplayManagerHelper mDisplayManagerHelper;
+    private MySwivelStateCallback mSwivelStateCallback;
+
+    private static final int TARGET_SUB_TYPE = DisplayManagerHelper.TYPE_SWIVEL;
+    private static final String TAG = "SwivelSample";
+    private static final int MAIN_SCREEN_ID = 0;
+    private int mSubScreenId = MAIN_SCREEN_ID;
+    private boolean mIsLgMultiDisplayDevice = false;
+    private View mView;             // object to check where the view is attached
+
 
     private final CitraDirectoryHelper citraDirectoryHelper = new CitraDirectoryHelper(this, () -> {
         // If mPlatformGamesFragment is null means game directory have not been set yet.
@@ -108,6 +132,16 @@ public final class MainActivity extends AppCompatActivity implements MainView {
             mPresenter.refreshGameList();
         });
 
+    private Display getSecondaryDisplay() {
+        DisplayManager displayManager = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+        Display[] displays = displayManager.getDisplays();
+        for (Display display : displays) {
+            if (display.getDisplayId() != Display.DEFAULT_DISPLAY) {
+                return display;
+            }
+        }
+        return null;
+    }
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         SplashScreen splashScreen = SplashScreen.installSplashScreen(this);
@@ -120,6 +154,26 @@ public final class MainActivity extends AppCompatActivity implements MainView {
 
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+
+        mView = findViewById(R.id.coordinator_main);
+
+        if(hasLGMultiScreenFeature()) {
+            mIsLgMultiDisplayDevice = DisplayManagerHelper.isMultiDisplayDevice();
+        }
+
+        if (mIsLgMultiDisplayDevice) {
+            mDisplayManagerHelper = new DisplayManagerHelper(this);
+            mSubScreenId = mDisplayManagerHelper.getMultiDisplayId();
+
+            if (DisplayManagerHelper.getMultiDisplayType() == TARGET_SUB_TYPE) {
+                Log.i(TAG, "This is swivel type.");
+            } else {
+                Log.i(TAG, "This is not swivel type.");
+            }
+        }
+
+
 
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
 
@@ -149,6 +203,29 @@ public final class MainActivity extends AppCompatActivity implements MainView {
         EmulationActivity.tryDismissRunningNotification(this);
 
         setInsets();
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+
+        if (mIsLgMultiDisplayDevice) {
+            if (mSwivelStateCallback == null) {
+                mSwivelStateCallback = new MySwivelStateCallback();
+                mDisplayManagerHelper.registerSwivelStateCallback(mSwivelStateCallback);
+            }
+
+            // Register a callback to be invoked when the global layout state or the visibility of views within the view tree changes.
+            mView.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
+                @Override
+                public void onGlobalLayout() {
+                    mView.getViewTreeObserver().removeOnGlobalLayoutListener(this);
+                    if (mDisplayManagerHelper.getSwivelState() == DisplayManagerHelper.SWIVEL_SWIVELED) {
+                        startLaunchActivity();
+                    }
+                }
+            });
+        }
     }
 
     @Override
@@ -301,5 +378,67 @@ public final class MainActivity extends AppCompatActivity implements MainView {
             frame.setPadding(insets.left, 0, insets.right, 0);
             return windowInsets;
         });
+    }
+
+
+
+    private void startLaunchActivity() {
+        startNewActivity(new Intent(this, EmulationActivity2.class));
+    }
+
+
+    private void startNewActivity(Intent intent) {
+        ActivityOptions options = ActivityOptions.makeBasic();
+        // set Display ID where your activity will be launched
+        int launchDisplayId = MAIN_SCREEN_ID;
+        if(mIsLgMultiDisplayDevice &&
+                mView.getDisplay().getDisplayId() == MAIN_SCREEN_ID &&
+                mDisplayManagerHelper.getSwivelState() == DisplayManagerHelper.SWIVEL_SWIVELED) {
+            launchDisplayId = mSubScreenId;
+        }
+        options.setLaunchDisplayId(launchDisplayId);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
+        startActivity(intent, options.toBundle());
+    }
+
+    private void stopMain2Activity() {
+        Intent intent = new Intent(ACTION_FINISH_MAIN2ACTIVITY);
+        sendBroadcast(intent);
+    }
+
+    private boolean hasLGMultiScreenFeature(){
+        String feature = "com.lge.multiscreen";
+        PackageManager pm = getPackageManager();
+        return pm.hasSystemFeature(feature);
+    }
+
+    /**
+     * Updates the swivel state based on the callback actions.
+     *
+     * @param state The state of swivel, e.g. SWIVEL_START, SWIVEL_END, etc.
+     */
+    private class MySwivelStateCallback extends SwivelStateCallback {
+        @Override
+        public void onSwivelStateChanged(int state) {
+            switch (state) {
+                case DisplayManagerHelper.SWIVEL_START:
+                    // Swivel start
+                    break;
+                case DisplayManagerHelper.SWIVEL_END:
+                    // Swivel complete
+                    startLaunchActivity();
+                    break;
+                case DisplayManagerHelper.NON_SWIVEL_START:
+                    // Non Swivel start
+                    break;
+                case DisplayManagerHelper.NON_SWIVEL_END:
+                    // Non Swivel complete
+                    stopMain2Activity();
+                    break;
+                default:
+                    // default value
+                    break;
+            }
+        }
     }
 }

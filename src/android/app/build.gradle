@@ -147,6 +147,9 @@ dependencies {
     // To use the androidx.test.core APIs
     androidTestImplementation "androidx.test:core:1.5.0"
     androidTestImplementation "androidx.test.ext:junit:1.1.5"
+
+    // LG Wing SDK
+    implementation files('libs/LGMultiScreenSDK.jar')
 }
 
 def getVersion() {
